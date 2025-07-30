@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
 import openpyxl
+import re
 
 # ------------------------------
 # WRR processing logic
 # ------------------------------
-def process_wrr_workbook(uploaded_file):
-    quarter_label = "3Q25"
+def process_wrr_workbook(uploaded_file, quarter_label):
     wb = openpyxl.load_workbook(uploaded_file, data_only=True)
     available_sheets = wb.sheetnames
 
@@ -42,15 +42,7 @@ def process_wrr_workbook(uploaded_file):
         }
         records.append(record)
 
-    df = pd.DataFrame(records)
-
-    # # Looker-style table calcs
-    # df["OVER_LTG"] = df["Forecast"] - df["LTG"]
-    # df["OVER_PIPE"] = df["Forecast"] - df["Pipeline"]
-    # df["OVER_OPEN"] = df["Forecast"] - df["Open"]
-
-    return df
-
+    return pd.DataFrame(records)
 
 # ------------------------------
 # Generate Looker table calcs
@@ -71,7 +63,6 @@ def generate_looker_snippets(df, metrics=["OTB", "LTG", "Pipeline", "Open"]):
         snippets[f"OVER_{metric.upper()}"] = snippet
     return snippets
 
-
 # ------------------------------
 # Streamlit App
 # ------------------------------
@@ -82,37 +73,49 @@ uploaded_file = st.file_uploader("Upload Weekly WRR File (.xlsx)", type=["xlsx"]
 
 if uploaded_file:
     try:
-        df = process_wrr_workbook(uploaded_file)
+        wb = openpyxl.load_workbook(uploaded_file, data_only=True)
+        sheetnames = wb.sheetnames
+        detected_quarters = sorted(set(re.findall(r"\dQ\d\d", " ".join(sheetnames))))
+        default_quarter = detected_quarters[0] if detected_quarters else ""
 
-        # Add totals row
-        total_row = df.drop(columns=["Category", "Quarter"]).sum(numeric_only=True)
-        total_row["Category"] = "Total"
-        total_row["Quarter"] = df["Quarter"].iloc[0]
-        df_with_total = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
+        quarter_label = st.text_input("Enter or confirm quarter label (e.g., 2Q25, 3Q25):", value=default_quarter)
 
-        # Format as currency
-        currency_cols = df.columns.drop(["Category", "Quarter"])
-        styled_df = df_with_total.style.format({col: "${:,.0f}" for col in currency_cols})
+        if quarter_label:
+            df = process_wrr_workbook(uploaded_file, quarter_label)
 
-        st.subheader("Processed WRR Data")
-        st.dataframe(styled_df, use_container_width=True)
+            # Add totals row
+            total_row = df.drop(columns=["Category", "Quarter"]).sum(numeric_only=True)
+            total_row["Category"] = "Total"
+            total_row["Quarter"] = df["Quarter"].iloc[0]
+            df_with_total = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
 
-        # Looker Snippets
-        snippets = generate_looker_snippets(df)
-        st.subheader("📄 Looker Table Calcs")
-        for name, code in snippets.items():
-            st.markdown(f"**{name}**")
-            st.code(code, language="sql")
+            # Format as currency
+            currency_cols = df.columns.drop(["Category", "Quarter"])
+            styled_df = df_with_total.style.format({col: "${:,.0f}" for col in currency_cols})
 
-        # Download
-        st.download_button(
-            label="Download Processed CSV",
-            data=df.to_csv(index=False),
-            file_name="WRR_Processed.csv",
-            mime="text/csv"
-        )
+            st.subheader("Processed WRR Data")
+            st.dataframe(styled_df, use_container_width=True)
+
+            # Looker Snippets
+            snippets = generate_looker_snippets(df)
+            st.subheader("📄 Looker Table Calcs")
+            for name, code in snippets.items():
+                st.markdown(f"**{name}**")
+                st.code(code, language="sql")
+
+            # Download
+            st.download_button(
+                label="Download Processed CSV",
+                data=df.to_csv(index=False),
+                file_name="WRR_Processed.csv",
+                mime="text/csv"
+            )
+        else:
+            st.warning("⚠️ Please enter a quarter label to proceed.")
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
+
 else:
     st.info("👈 Upload a WRR Excel file to get started.")
+
